@@ -158,6 +158,62 @@ class SLDS(object):
         self.emissions.params = value[3]
 
     @ensure_args_are_lists
+    def initialize_emissions(self, datas, inputs=None, masks=None, tags=None):
+        
+        # First initialize the observation model
+        self.emissions.initialize(datas, inputs, masks, tags)
+
+        print("[WARNING] Initializing emissions only")
+
+    @ensure_args_are_lists
+    def initialize_transitions(self, datas, inputs=None, masks=None, tags=None,
+                   verbose=0,
+                   num_init_iters=50,
+                   discrete_state_init_method="random",
+                   num_init_restarts=1):
+        # First initialize the observation model
+        self.emissions.initialize(datas, inputs, masks, tags)
+
+        # Get the initialized variational mean for the data
+        xs = [self.emissions.invert(data, input, mask, tag)
+              for data, input, mask, tag in zip(datas, inputs, masks, tags)]
+        xmasks = [np.ones_like(x, dtype=bool) for x in xs]
+
+        # Number of times to run the arhmm initialization (we'll use the one with the highest log probability as the initialization)
+        pbar  = ssm_pbar(num_init_restarts, verbose, "ARHMM Initialization restarts", [''])
+
+        #Loop through initialization restarts
+        best_lp = -np.inf
+        for i in pbar: #range(num_init_restarts):
+
+            # Now run a few iterations of EM on a ARHMM with the variational mean
+            if verbose > 0:
+                print("Initializing with an ARHMM using {} steps of EM.".format(num_init_iters))
+
+            arhmm = hmm.HMM(self.K, self.D, M=self.M,
+                            init_state_distn=copy.deepcopy(self.init_state_distn),
+                            transitions=copy.deepcopy(self.transitions),
+                            observations=copy.deepcopy(self.dynamics))
+
+            arhmm.fit(xs, inputs=inputs, masks=xmasks, tags=tags,
+                      verbose=verbose,
+                      method="em",
+                      num_iters=num_init_iters,
+                      init_method=discrete_state_init_method)
+
+            #Keep track of the arhmm that led to the highest log probability
+            current_lp = arhmm.log_probability(xs)
+            if current_lp > best_lp:
+                best_lp =  copy.deepcopy(current_lp)
+                best_arhmm = copy.deepcopy(arhmm)
+
+        self.init_state_distn = copy.deepcopy(best_arhmm.init_state_distn)
+        self.transitions = copy.deepcopy(best_arhmm.transitions)
+        # self.dynamics = copy.deepcopy(best_arhmm.observations)
+
+        print("[WARNING] Initializing emissions and transitions only")
+
+    @ensure_args_are_lists
     def initialize(self, datas, inputs=None, masks=None, tags=None,
                    verbose=0,
                    num_init_iters=50,
@@ -776,7 +832,15 @@ class SLDS(object):
                             format(method, _fitting_methods.keys()))
 
         # Initialize the model parameters
-        if initialize:
+        if initialize == 'emissions':
+            self.initialize_emissions(datas, inputs, masks, tags)
+        elif initialize == 'transitions':
+            self.initialize_transitions(datas, inputs, masks, tags,
+                            verbose=verbose,
+                            discrete_state_init_method=discrete_state_init_method,
+                            num_init_iters=num_init_iters,
+                            num_init_restarts=num_init_restarts)
+        elif initialize:
             self.initialize(datas, inputs, masks, tags,
                             verbose=verbose,
                             discrete_state_init_method=discrete_state_init_method,

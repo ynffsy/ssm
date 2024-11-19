@@ -2,23 +2,27 @@ import copy
 import warnings
 from tqdm.auto import trange
 
-import autograd.numpy as np
-import autograd.numpy.random as npr
-from autograd import value_and_grad, grad
+# import autograd.numpy as np
+# import autograd.numpy.random as npr
+# from autograd import value_and_grad, grad
 
-from ssm.optimizers import adam_step, rmsprop_step, sgd_step, lbfgs, \
+import jax.numpy as jnp
+from jax import random
+from jax import value_and_grad, grad
+
+from ssm_gpu.optimizers import adam_step, rmsprop_step, sgd_step, lbfgs, \
     convex_combination, newtons_method_block_tridiag_hessian
-from ssm.primitives import hmm_normalizer
-from ssm.messages import hmm_expected_states, viterbi
-from ssm.util import ensure_args_are_lists, \
-    ensure_slds_args_not_none, ensure_variational_args_are_lists, ssm_pbar
+from ssm_gpu.primitives import hmm_normalizer
+from ssm_gpu.messages import hmm_expected_states, viterbi
+from ssm_gpu.util import ensure_args_are_lists, \
+    ensure_slds_args_not_none, ensure_variational_args_are_lists, ssm_gpu_pbar
 
-import ssm.observations as obs
-import ssm.transitions as trans
-import ssm.init_state_distns as isd
-import ssm.emissions as emssn
-import ssm.hmm as hmm
-import ssm.variational as varinf
+import ssm_gpu.observations as obs
+import ssm_gpu.transitions as trans
+import ssm_gpu.init_state_distns as isd
+import ssm_gpu.emissions as emssn
+import ssm_gpu.hmm as hmm
+import ssm_gpu.variational as varinf
 
 __all__ = ['SLDS', 'LDS']
 
@@ -67,7 +71,7 @@ class SLDS(object):
             transitions = transition_classes[transitions](K, D, M=M, **transition_kwargs)
         if not isinstance(transitions, trans.Transitions):
             raise TypeError("'transitions' must be a subclass of"
-                            " ssm.transitions.Transitions")
+                            " ssm_gpu.transitions.Transitions")
 
         # Make the dynamics distn
         dynamics_classes = dict(
@@ -90,7 +94,7 @@ class SLDS(object):
             dynamics = dynamics_classes[dynamics](K, D, M=M, **dynamics_kwargs)
         if not isinstance(dynamics, obs.Observations):
             raise TypeError("'dynamics' must be a subclass of"
-                            " ssm.observations.Observations")
+                            " ssm_gpu.observations.Observations")
 
         # Make the emission distn
         emission_classes = dict(
@@ -135,7 +139,7 @@ class SLDS(object):
                 single_subspace=single_subspace, **emission_kwargs)
         if not isinstance(emissions, emssn.Emissions):
             raise TypeError("'emissions' must be a subclass of"
-                            " ssm.emissions.Emissions")
+                            " ssm_gpu.emissions.Emissions")
 
         self.N, self.K, self.D, self.M = N, K, D, M
         self.init_state_distn = init_state_distn
@@ -177,13 +181,13 @@ class SLDS(object):
         # Get the initialized variational mean for the data
         xs = [self.emissions.invert(data, input, mask, tag)
               for data, input, mask, tag in zip(datas, inputs, masks, tags)]
-        xmasks = [np.ones_like(x, dtype=bool) for x in xs]
+        xmasks = [jnp.ones_like(x, dtype=bool) for x in xs]
 
         # Number of times to run the arhmm initialization (we'll use the one with the highest log probability as the initialization)
-        pbar  = ssm_pbar(num_init_restarts, verbose, "ARHMM Initialization restarts", [''])
+        pbar  = ssm_gpu_pbar(num_init_restarts, verbose, "ARHMM Initialization restarts", [''])
 
         #Loop through initialization restarts
-        best_lp = -np.inf
+        best_lp = -jnp.inf
         for i in pbar: #range(num_init_restarts):
 
             # Now run a few iterations of EM on a ARHMM with the variational mean
@@ -225,13 +229,13 @@ class SLDS(object):
         # Get the initialized variational mean for the data
         xs = [self.emissions.invert(data, input, mask, tag)
               for data, input, mask, tag in zip(datas, inputs, masks, tags)]
-        xmasks = [np.ones_like(x, dtype=bool) for x in xs]
+        xmasks = [jnp.ones_like(x, dtype=bool) for x in xs]
 
         # Number of times to run the arhmm initialization (we'll use the one with the highest log probability as the initialization)
-        pbar  = ssm_pbar(num_init_restarts, verbose, "ARHMM Initialization restarts", [''])
+        pbar  = ssm_gpu_pbar(num_init_restarts, verbose, "ARHMM Initialization restarts", [''])
 
         #Loop through initialization restarts
-        best_lp = -np.inf
+        best_lp = -jnp.inf
         for i in pbar: #range(num_init_restarts):
 
             # Now run a few iterations of EM on a ARHMM with the variational mean
@@ -263,7 +267,7 @@ class SLDS(object):
         """
         Permute the discrete latent states.
         """
-        assert np.all(np.sort(perm) == np.arange(self.K))
+        assert jnp.all(jnp.sort(perm) == jnp.arange(self.K))
         self.init_state_distn.permute(perm)
         self.transitions.permute(perm)
         self.dynamics.permute(perm)
@@ -289,11 +293,11 @@ class SLDS(object):
         # If prefix is given, pad the output with it
         if prefix is None:
             pad = 1
-            z = np.zeros(T+1, dtype=int)
-            x = np.zeros((T+1,) + D)
-            # input = np.zeros((T+1,) + M) if input is None else input
-            input = np.zeros((T+1,) + M) if input is None else np.concatenate((np.zeros((1,) + M), input))
-            xmask = np.ones((T+1,) + D, dtype=bool)
+            z = jnp.zeros(T+1, dtype=int)
+            x = jnp.zeros((T+1,) + D)
+            # input = jnp.zeros((T+1,) + M) if input is None else input
+            input = jnp.zeros((T+1,) + M) if input is None else jnp.concatenate((jnp.zeros((1,) + M), input))
+            xmask = jnp.ones((T+1,) + D, dtype=bool)
 
             # Sample the first state from the initial distribution
             pi0 = self.init_state_distn.initial_state_distn
@@ -307,15 +311,15 @@ class SLDS(object):
             # assert xhist.shape == (pad, D)
             assert yhist.shape == (pad, N)
 
-            z = np.concatenate((zhist, np.zeros(T, dtype=int)))
-            x = np.concatenate((xhist, np.zeros((T,) + D)))
-            # input = np.zeros((T+pad,) + M) if input is None else input
-            input = np.zeros((T+pad,) + M) if input is None else np.concatenate((np.zeros((pad,) + M), input))
-            xmask = np.ones((T+pad,) + D, dtype=bool)
+            z = jnp.concatenate((zhist, jnp.zeros(T, dtype=int)))
+            x = jnp.concatenate((xhist, jnp.zeros((T,) + D)))
+            # input = jnp.zeros((T+pad,) + M) if input is None else input
+            input = jnp.zeros((T+pad,) + M) if input is None else jnp.concatenate((jnp.zeros((pad,) + M), input))
+            xmask = jnp.ones((T+pad,) + D, dtype=bool)
 
         # Sample z and x
         for t in range(pad, T+pad):
-            Pt = np.exp(self.transitions.log_transition_matrices(x[t-1:t+1], input[t-1:t+1], mask=xmask[t-1:t+1], tag=tag))[0]
+            Pt = jnp.exp(self.transitions.log_transition_matrices(x[t-1:t+1], input[t-1:t+1], mask=xmask[t-1:t+1], tag=tag))[0]
             z[t] = npr.choice(self.K, p=Pt[z[t-1]])
             x[t] = self.dynamics.sample_x(z[t], x[:t], input=input[t], tag=tag, with_noise=with_noise)
 
@@ -326,7 +330,7 @@ class SLDS(object):
 
     @ensure_slds_args_not_none
     def expected_states(self, variational_mean, data, input=None, mask=None, tag=None):
-        x_mask = np.ones_like(variational_mean, dtype=bool)
+        x_mask = jnp.ones_like(variational_mean, dtype=bool)
         pi0 = self.init_state_distn.initial_state_distn
         Ps = self.transitions.transition_matrices(variational_mean, input, x_mask, tag)
         log_likes = self.dynamics.log_likelihoods(variational_mean, input, x_mask, tag)
@@ -337,7 +341,7 @@ class SLDS(object):
     def most_likely_states(self, variational_mean, data, input=None, mask=None, tag=None):
         pi0 = self.init_state_distn.initial_state_distn
         Ps = self.transitions.transition_matrices(variational_mean, input, mask, tag)
-        log_likes = self.dynamics.log_likelihoods(variational_mean, input, np.ones_like(variational_mean, dtype=bool), tag)
+        log_likes = self.dynamics.log_likelihoods(variational_mean, input, jnp.ones_like(variational_mean, dtype=bool), tag)
         log_likes += self.emissions.log_likelihoods(data, input, mask, tag, variational_mean)
         return viterbi(pi0, Ps, log_likes)
 
@@ -353,7 +357,7 @@ class SLDS(object):
     @ensure_args_are_lists
     def log_probability(self, datas, inputs=None, masks=None, tags=None):
         warnings.warn("Cannot compute exact marginal log probability for the SLDS.")
-        return np.nan
+        return jnp.nan
 
     @ensure_variational_args_are_lists
     def _bbvi_elbo(self, variational_posterior, datas, inputs=None, masks=None, tags=None,  n_samples=1):
@@ -373,7 +377,7 @@ class SLDS(object):
             for x, data, input, mask, tag in zip(xs, datas, inputs, masks, tags):
 
                 # The "mask" for x is all ones
-                x_mask = np.ones_like(x, dtype=bool)
+                x_mask = jnp.ones_like(x, dtype=bool)
 
                 pi0 = self.init_state_distn.initial_state_distn
                 Ps = self.transitions.transition_matrices(x, input, x_mask, tag)
@@ -383,7 +387,7 @@ class SLDS(object):
 
             # -log q(x)
             elbo -= variational_posterior.log_density(xs)
-            assert np.isfinite(elbo)
+            assert jnp.isfinite(elbo)
 
         return elbo / n_samples
 
@@ -412,7 +416,7 @@ class SLDS(object):
 
         # Set up the progress bar
         elbos = [-_objective(params, 0) * T]
-        pbar  = ssm_pbar(num_iters, verbose, "LP: {:.1f}", [elbos[0]])
+        pbar  = ssm_gpu_pbar(num_iters, verbose, "LP: {:.1f}", [elbos[0]])
 
         # Run the optimizer
         step = dict(sgd=sgd_step, rmsprop=rmsprop_step, adam=adam_step)[optimizer]
@@ -434,7 +438,7 @@ class SLDS(object):
         else:
             variational_posterior.params = params
 
-        return np.array(elbos)
+        return jnp.array(elbos)
 
     def _fit_laplace_em_discrete_state_update(
         self, variational_posterior, datas,
@@ -456,23 +460,23 @@ class SLDS(object):
             zip(x_sampless, datas, inputs, masks, tags):
 
             # Make a mask for the continuous states
-            x_mask = np.ones_like(x_samples[0], dtype=bool)
+            x_mask = jnp.ones_like(x_samples[0], dtype=bool)
 
             # Compute expected log initial distribution, transition matrices, and likelihoods
-            pi0 = np.mean(
+            pi0 = jnp.mean(
                 [self.init_state_distn.initial_state_distn
                  for x in x_samples], axis=0)
 
-            Ps = np.mean(
+            Ps = jnp.mean(
                 [self.transitions.transition_matrices(x, input, x_mask, tag)
                  for x in x_samples], axis=0)
 
-            log_likes = np.mean(
+            log_likes = jnp.mean(
                 [self.dynamics.log_likelihoods(x, input, x_mask, tag)
                  for x in x_samples], axis=0)
 
             if not self.emissions.single_subspace:
-                log_likes += np.mean(
+                log_likes += jnp.mean(
                     [self.emissions.log_likelihoods(data, input, mask, tag, x)
                      for x in x_samples], axis=0)
 
@@ -494,7 +498,7 @@ class SLDS(object):
                                         Ezzp1,
                                         scale=1):
         # The "mask" for x is all ones
-        x_mask = np.ones_like(x, dtype=bool)
+        x_mask = jnp.ones_like(x, dtype=bool)
         log_pi0 = self.init_state_distn.log_initial_state_distn
         log_Ps = self.transitions.\
             log_transition_matrices(x, input, x_mask, tag)
@@ -502,16 +506,16 @@ class SLDS(object):
         log_likes += self.emissions.log_likelihoods(data, input, mask, tag, x)
 
         # Compute the expected log probability
-        elp = np.sum(Ez[0] * log_pi0)
-        elp += np.sum(Ezzp1 * log_Ps)
-        elp += np.sum(Ez * log_likes)
-        assert np.all(np.isfinite(elp))
+        elp = jnp.sum(Ez[0] * log_pi0)
+        elp += jnp.sum(Ezzp1 * log_Ps)
+        elp += jnp.sum(Ez * log_likes)
+        assert jnp.all(jnp.isfinite(elp))
         return -1 * elp / scale
 
     # We also need the hessian of the of the expected log joint
     def _laplace_neg_hessian_params(self, data, input, mask, tag, x, Ez, Ezzp1):
-        T, D = np.shape(x)
-        x_mask = np.ones((T, D), dtype=bool)
+        T, D = jnp.shape(x)
+        x_mask = jnp.ones((T, D), dtype=bool)
 
         J_ini, J_dyn_11, J_dyn_21, J_dyn_22 = self.dynamics.\
             neg_hessian_expected_log_dynamics_prob(Ez, x, input, x_mask, tag)
@@ -528,7 +532,7 @@ class SLDS(object):
         J_ini, J_dyn_11, J_dyn_21, J_dyn_22, J_obs = \
             self._laplace_neg_hessian_params(data, input, mask, tag, x, Ez, Ezzp1)
 
-        hessian_diag = np.zeros_like(J_obs)
+        hessian_diag = jnp.zeros_like(J_obs)
         hessian_diag[:] += J_obs
         hessian_diag[0] += J_ini
         hessian_diag[:-1] += J_dyn_11
@@ -548,7 +552,7 @@ class SLDS(object):
         h_ini = J_ini @ x[0]
 
         h_dyn_1 = (J_dyn_11 @ x[:-1][:, :, None])[:, :, 0]
-        h_dyn_1 += (np.swapaxes(J_dyn_21, -1, -2) @ x[1:][:, :, None])[:, :, 0]
+        h_dyn_1 += (jnp.swapaxes(J_dyn_21, -1, -2) @ x[1:][:, :, None])[:, :, 0]
 
         h_dyn_2 = (J_dyn_22 @ x[1:][:, :, None])[:, :, 0]
         h_dyn_2 += (J_dyn_21 @ x[:-1][:, :, None])[:, :, 0]
@@ -604,7 +608,7 @@ class SLDS(object):
                 raise Exception("Invalid continuous_optimizer: {}".format(continuous_optimizer ))
 
             # Evaluate the Hessian at the mode
-            assert np.all(np.isfinite(_objective(x, -1)))
+            assert jnp.all(jnp.isfinite(_objective(x, -1)))
 
             J_ini, J_dyn_11, J_dyn_21, J_dyn_22, J_obs = self.\
                 _laplace_neg_hessian_params(data, input, mask, tag, x, Ez, Ezzp1)
@@ -642,7 +646,7 @@ class SLDS(object):
         # Approximate update of initial distribution  and transition params.
         # Replace the expectation wrt x with sample from q(x). The parameter
         # update is partial and depends on alpha.
-        xmasks = [np.ones_like(x, dtype=bool) for x in continuous_samples]
+        xmasks = [jnp.ones_like(x, dtype=bool) for x in continuous_samples]
         for distn in [self.init_state_distn, self.transitions]:
             curr_prms = copy.deepcopy(distn.params)
             if curr_prms == tuple(): continue
@@ -702,16 +706,16 @@ class SLDS(object):
                     zip(continuous_samples, discrete_expectations, datas, inputs, masks, tags):
 
                     # The "mask" for x is all ones
-                    x_mask = np.ones_like(x, dtype=bool)
+                    x_mask = jnp.ones_like(x, dtype=bool)
                     log_pi0 = self.init_state_distn.log_initial_state_distn
                     log_Ps = self.transitions.log_transition_matrices(x, input, x_mask, tag)
                     log_likes = self.dynamics.log_likelihoods(x, input, x_mask, tag)
                     log_likes += self.emissions.log_likelihoods(data, input, mask, tag, x)
 
                     # Compute the expected log probability
-                    exp_log_joint += np.sum(Ez[0] * log_pi0)
-                    exp_log_joint += np.sum(Ezzp1 * log_Ps)
-                    exp_log_joint += np.sum(Ez * log_likes)
+                    exp_log_joint += jnp.sum(Ez[0] * log_pi0)
+                    exp_log_joint += jnp.sum(Ezzp1 * log_Ps)
+                    exp_log_joint += jnp.sum(Ez * log_likes)
             return exp_log_joint / n_samples
 
         return estimate_expected_log_joint(n_samples) + variational_posterior.entropy()
@@ -737,7 +741,7 @@ class SLDS(object):
         """
         elbos = [self._laplace_em_elbo(variational_posterior, datas, inputs, masks, tags)]
 
-        pbar = ssm_pbar(num_iters, verbose, "ELBO: {:.1f}", [elbos[-1]])
+        pbar = ssm_gpu_pbar(num_iters, verbose, "ELBO: {:.1f}", [elbos[-1]])
 
         for itr in pbar:
             # 1. Update the discrete state posterior q(z) if K>1
@@ -761,7 +765,7 @@ class SLDS(object):
             if verbose == 2:
               pbar.set_description("ELBO: {:.1f}".format(elbos[-1]))
 
-        return np.array(elbos)
+        return jnp.array(elbos)
 
     def _make_variational_posterior(self, variational_posterior, datas, inputs, masks, tags, method, **variational_posterior_kwargs):
         # Initialize the variational posterior
@@ -784,7 +788,7 @@ class SLDS(object):
             # Check validity of given posterior
             posterior = variational_posterior
             assert isinstance(posterior, varinf.VariationalPosterior), \
-            "Given posterior must be an instance of ssm.variational.VariationalPosterior"
+            "Given posterior must be an instance of ssm_gpu.variational.VariationalPosterior"
 
         # Check that the posterior type works with the fitting method
         if method in ["svi", "bbvi"]:
@@ -920,7 +924,7 @@ class LDS(SLDS):
             dynamics = dynamics_classes[dynamics](1, D, M=M, **dynamics_kwargs)
         if not isinstance(dynamics, obs.Observations):
             raise TypeError("'dynamics' must be a subclass of"
-                            " ssm.observations.Observations")
+                            " ssm_gpu.observations.Observations")
 
         # Make the emission distn
         emission_classes = dict(
@@ -965,7 +969,7 @@ class LDS(SLDS):
                 single_subspace=True, **emission_kwargs)
         if not isinstance(emissions, emssn.Emissions):
             raise TypeError("'emissions' must be a subclass of"
-                            " ssm.emissions.Emissions")
+                            " ssm_gpu.emissions.Emissions")
 
         init_state_distn = isd.InitialStateDistribution(1, D, M)
         transitions = trans.StationaryTransitions(1, D, M)
@@ -977,8 +981,8 @@ class LDS(SLDS):
 
     @ensure_slds_args_not_none
     def expected_states(self, variational_mean, data, input=None, mask=None, tag=None):
-        return np.ones((variational_mean.shape[0], 1)), \
-               np.ones((variational_mean.shape[0], 1, 1)), \
+        return jnp.ones((variational_mean.shape[0], 1)), \
+               jnp.ones((variational_mean.shape[0], 1, 1)), \
                0
 
     @ensure_slds_args_not_none
@@ -991,7 +995,7 @@ class LDS(SLDS):
     @ensure_args_are_lists
     def log_probability(self, datas, inputs=None, masks=None, tags=None):
         warnings.warn("Log probability of LDS is not yet implemented.")
-        return np.nan
+        return jnp.nan
 
     def sample(self, T, input=None, tag=None, prefix=None, with_noise=True):
         (_, x, y) = super().sample(T, input=input, tag=tag, prefix=prefix, with_noise=with_noise)
