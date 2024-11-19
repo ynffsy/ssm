@@ -1,20 +1,17 @@
-from warnings import warn
 from tqdm.auto import trange
+from scipy.optimize import linear_sum_assignment
 
 import jax.numpy as np
 from jax import random
-from jax.scipy.special import logsumexp
-from jax import grad
-
-from scipy.optimize import linear_sum_assignment
-from scipy.special import gammaln, digamma, polygamma
-
-import jax
 from jax.nn import one_hot as jax_one_hot
+
+
 
 SEED = hash("ssm") % (2**32)
 LOG_EPS = 1e-16
 DIV_EPS = 1e-16
+
+
 
 def compute_state_overlap(z1, z2, K1=None, K2=None):
     assert z1.dtype == int and z2.dtype == int
