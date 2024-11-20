@@ -8,9 +8,15 @@ from autograd.tracer import getval
 from autograd.extend import primitive, defvjp
 from ssm.util import LOG_EPS, DIV_EPS
 
+from numba import njit
+
+
+
 to_c = lambda arr: np.copy(getval(arr), 'C') if not arr.flags['C_CONTIGUOUS'] else getval(arr)
 
-@numba.jit(nopython=True, cache=True)
+
+
+@njit(cache=True)
 def logsumexp(x):
     N = x.shape[0]
 
@@ -27,7 +33,7 @@ def logsumexp(x):
     return m + np.log(out)
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def dlse(a, out):
     K = a.shape[0]
     lse = logsumexp(a)
@@ -35,7 +41,7 @@ def dlse(a, out):
         out[k] = np.exp(a[k] - lse)
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def forward_pass(pi0,
                  Ps,
                  log_likes,
@@ -60,7 +66,7 @@ def forward_pass(pi0,
     return logsumexp(alphas[T-1])
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def hmm_filter(pi0, Ps, ll):
     T, K = ll.shape
 
@@ -96,7 +102,7 @@ def hmm_filter(pi0, Ps, ll):
     return pz_tp1t
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def backward_pass(Ps,
                   log_likes,
                   betas):
@@ -124,7 +130,7 @@ def backward_pass(Ps,
 
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _compute_stationary_expected_joints(alphas, betas, lls, log_P, E_zzp1):
     """
     Helper function to compute summary statistics, summing over time.
@@ -206,7 +212,7 @@ def hmm_expected_states(pi0, Ps, ll):
     return expected_states, expected_joints, normalizer
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def backward_sample(Ps, log_likes, alphas, us, zs):
     T = log_likes.shape[0]
     K = log_likes.shape[1]
@@ -243,7 +249,7 @@ def backward_sample(Ps, log_likes, alphas, us, zs):
             lpzp1 = np.log(Ps[(t-1) * hetero, :, int(zs[t])] + LOG_EPS)
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _hmm_sample(pi0, Ps, ll):
     T, K = ll.shape
 
@@ -263,7 +269,7 @@ def hmm_sample(pi0, Ps, ll):
     return _hmm_sample(pi0, Ps, ll).astype(int)
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _viterbi(pi0, Ps, ll):
     """
     This is modified from pyhsmm.internals.hmm_states
@@ -302,7 +308,7 @@ def viterbi(pi0, Ps, ll):
     return _viterbi(pi0, Ps, ll).astype(int)
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def grad_hmm_normalizer(log_Ps,
                         alphas,
                         d_log_pi0,
@@ -407,7 +413,7 @@ defvjp(hmm_normalizer,
 ##
 # Gaussian linear dynamical systems message passing code
 ##
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _condition_on(m, S, C, D, R, u, y, mcond, Scond):
     # Condition a Gaussian potential on a new linear Gaussian observation
     #
@@ -436,13 +442,13 @@ def _condition_on(m, S, C, D, R, u, y, mcond, Scond):
     # return mcond, Scond
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _condition_on_diagonal(m, S, C, D, R_diag, u, y):
     # Same as above but where R is assumed to be a diagonal covariance matrix
     raise NotImplementedError
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _predict(m, S, A, B, Q, u, mpred, Spred):
     # Predict next mean and covariance under a linear Gaussian model
     #
@@ -452,7 +458,7 @@ def _predict(m, S, A, B, Q, u, mpred, Spred):
     Spred[:] = A @ S @ A.T + Q
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def gaussian_logpdf(y, m, S):
     D = m.shape[0]
     L = np.linalg.cholesky(S)
@@ -460,14 +466,14 @@ def gaussian_logpdf(y, m, S):
     return -0.5 * D * np.log(2 * np.pi) - np.sum(np.log(np.diag(L))) -0.5 * np.sum(x**2)
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _sample_gaussian(m, S, z):
     # Sample a multivariate Gaussian with mean m, covariance S,
     # using a standard normal vector z. Put the output in out.
     L = np.linalg.cholesky(S)
     return m + L @ z
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _kalman_filter(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys):
     T, N = ys.shape
     D = mu0.shape[0]
@@ -517,7 +523,7 @@ def _kalman_filter(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys):
     return ll, filtered_mus, filtered_Sigmas
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _kalman_sample(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys):
     T, N = ys.shape
     D = mu0.shape[0]
@@ -551,7 +557,7 @@ def _kalman_sample(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys):
     return ll, xs
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _kalman_smoother(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys):
     T, N = ys.shape
     D = mu0.shape[0]
@@ -673,7 +679,7 @@ def kalman_smoother(mu0, S0, As, Bs, Qs, Cs, Ds, Rs, us, ys):
 ##
 # Kalman filter/sampler/smoother with diagonal observation noise
 ##
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _condition_on_diagonal(m, S, C, D, R_diag, u, y, mcond, Scond):
     # Same as above but where R is assumed to be a diagonal covariance matrix
     # The unnormalized potential is
@@ -689,7 +695,7 @@ def _condition_on_diagonal(m, S, C, D, R_diag, u, y, mcond, Scond):
     mcond[:] = Scond @ (np.linalg.solve(S, m) + (C.T / R_diag) @ (y - D @ u))
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def gaussian_logpdf_lrpd(y, m, C, S, r):
     # compute N(y | m, diag(r) + C S C^T)
     #
@@ -718,7 +724,7 @@ def gaussian_logpdf_lrpd(y, m, C, S, r):
            -0.5 * np.sum((y - m)**2 / r) +0.5 * np.sum(x**2)
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _kalman_filter_diagonal(mu0, S0, As, Bs, Qs, Cs, Ds, R_diags, us, ys):
     T, N = ys.shape
     D = mu0.shape[0]
@@ -768,7 +774,7 @@ def _kalman_filter_diagonal(mu0, S0, As, Bs, Qs, Cs, Ds, R_diags, us, ys):
     return ll, filtered_mus, filtered_Sigmas
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _kalman_sample_diagonal(mu0, S0, As, Bs, Qs, Cs, Ds, R_diags, us, ys):
     T, N = ys.shape
     D = mu0.shape[0]
@@ -801,7 +807,7 @@ def _kalman_sample_diagonal(mu0, S0, As, Bs, Qs, Cs, Ds, R_diags, us, ys):
 
     return ll, xs
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _kalman_smoother_diagonal(mu0, S0, As, Bs, Qs, Cs, Ds, R_diags, us, ys):
     T, N = ys.shape
     D = mu0.shape[0]
@@ -926,14 +932,14 @@ def kalman_smoother_diagonal(mu0, S0, As, Bs, Qs, Cs, Ds, R_diags, us, ys):
 ##
 # Information form filtering and smoothing
 ##
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _info_condition_on(J_pred, h_pred, J_obs, h_obs, log_Z_obs, J_cond, h_cond):
     J_cond[:] = J_pred + J_obs
     h_cond[:] = h_pred + h_obs
     return log_Z_obs
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _info_lognorm(J, h):
     # Update the log normalizer, marginalizing out x_t
     D = h.shape[0]
@@ -943,7 +949,7 @@ def _info_lognorm(J, h):
     return log_Z
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _info_predict(J_filt, h_filt, J_11, J_21, J_22, h_1, h_2, log_Z_dyn, J_pred, h_pred):
     tmp_J = J_filt + J_11
     tmp_h = h_filt + h_1
@@ -954,7 +960,7 @@ def _info_predict(J_filt, h_filt, J_11, J_21, J_22, h_1, h_2, log_Z_dyn, J_pred,
     return log_Z_dyn + _info_lognorm(tmp_J, tmp_h)
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _sample_info_gaussian(J, h, noise):
      L = np.linalg.cholesky(J)
      # sample = spla.solve_triangular(L, noise, lower=True, trans='T')
@@ -966,7 +972,7 @@ def _sample_info_gaussian(J, h, noise):
      return sample
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _kalman_info_filter_with_predictions(
     J_ini, h_ini, log_Z_ini,
     J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
@@ -1024,7 +1030,7 @@ def _kalman_info_filter_with_predictions(
     return log_Z, filtered_Js, filtered_hs, predicted_Js, predicted_hs
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _kalman_info_filter(
     J_ini, h_ini, log_Z_ini,
     J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
@@ -1039,7 +1045,7 @@ def _kalman_info_filter(
     return log_Z, filtered_Js, filtered_hs
 
 
-#@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _kalman_info_sample(J_ini, h_ini, log_Z_ini,
                        J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
                        J_obs, h_obs, log_Z_obs):
@@ -1076,7 +1082,7 @@ def _kalman_info_sample(J_ini, h_ini, log_Z_ini,
     return samples
 
 
-@numba.jit(nopython=True, cache=True)
+@njit(cache=True)
 def _kalman_info_smoother(J_ini, h_ini, log_Z_ini,
                          J_dyn_11, J_dyn_21, J_dyn_22, h_dyn_1, h_dyn_2, log_Z_dyn,
                          J_obs, h_obs, log_Z_obs,):
